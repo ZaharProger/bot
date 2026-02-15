@@ -12,11 +12,13 @@ class BaseModel(peewee.Model):
 
 
 class Chat(BaseModel):
+    messenger_chat_id = peewee.BigIntegerField(null=False)
     class Meta:
         table_name = 'Chats'
 
 
 class Bot(BaseModel):
+    messenger_bot_id = peewee.BigIntegerField(null=False)
     class Meta:
         table_name = 'Bots'
 
