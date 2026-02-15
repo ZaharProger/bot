@@ -1,4 +1,5 @@
 import peewee
+from dataclasses import dataclass
 
 
 db = peewee.DatabaseProxy()
@@ -42,3 +43,10 @@ class ChatBotSettings(BaseModel):
     model = peewee.ForeignKeyField(AIModel, related_name='chatbot_settings')
     class Meta:
         table_name = 'ChatBotSettings'
+
+
+@dataclass
+class ResponseResult:
+    is_ok: bool
+    code: int
+    data: dict
