@@ -1,16 +1,17 @@
 from abc import abstractmethod, ABC
 from random import random
 from os import environ
-from api import perform_api_call
-from utils import convert_text_to_audio
+from utils import convert_text_to_audio, perform_api_call
 from models import *
 
 
 class BotClient(ABC):
-    def __init__(self, api_base_url):
+    def __init__(self, api_base_url, model, activity):
         super().__init__()
         self._api_base_url = api_base_url
         self._offset = 0
+        self._model = model
+        self._activity = activity
     
 
     def _update_offset(self, collection, update_id_key):
@@ -79,6 +80,23 @@ class BotClient(ABC):
             .execute()
 
 
+    def _get_chat_messages(self, chat):
+        ordered_messages_from_chat = ChatMessage.select() \
+            .where(ChatMessage.chat == chat) \
+            .order_by(ChatMessage.send_datetime)
+        
+        chat_members = []
+        messages = []
+        for message in ordered_messages_from_chat:
+            chat_members.append(message.sender)
+            messages.append(f"{message.sender}: {message.text}")
+        
+        chat_members_str = ','.join(chat_members)
+        messages_str = '\n'.join(messages)
+
+        return f"Участники диалога: {chat_members_str}\nДиалог:\n{messages_str}"
+
+
     @abstractmethod
     def run(self):
         pass
@@ -108,12 +126,13 @@ class TgBotClient(BotClient):
                 self._update_offset(response.data['result'], 'update_id')
 
                 current_chat = self._attach_chat_to_bot('', '', {
-                    'model': '',
-                    'activity': 0.0
+                    'model': self._model,
+                    'activity': self._activity
                 })
                 self._save_message_from_chat(current_chat, '', '', '')
                 
-                if random() > 0.0:
+                if random() > self._activity:
+                    prompt = f"Поучаствуй в диалоге. Составь свою реплику, опираясь на лексику, эмоции и контекст диалога.\n{self._get_chat_messages(current_chat)}"
                     response = perform_api_call(
                         f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
                         method='post',
@@ -121,13 +140,13 @@ class TgBotClient(BotClient):
                             'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
                         },
                         body={
-                            'model': '',
-                            'promt': '',
+                            'model': self._model,
+                            'prompt': prompt,
                             'stream': False
                         }
                     )
                     if response.is_ok:
-                        response_from_llm = response.json()['response']
+                        response_from_llm = response.data['response']
                         self._create_answer_to_chat(response_from_llm, current_chat)
                         self._clear_chat_messages(current_chat)
             else:

@@ -4,3 +4,4 @@ requests
 peewee[psycopg3]
 dotenv
 psycopg2-binary
+argparse
