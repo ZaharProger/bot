@@ -41,8 +41,8 @@ class ChatMessage(BaseModel):
 class ChatBotSettings(BaseModel):
     chat = peewee.ForeignKeyField(Chat, related_name='chats')
     bot = peewee.ForeignKeyField(Bot, related_name='bots')
-    activity = peewee.FloatField(null=False)
-    model = peewee.ForeignKeyField(AIModel, related_name='chatbot_settings')
+    activity = peewee.FloatField(null=False, default=0.5)
+    model = peewee.ForeignKeyField(AIModel, related_name='chatbot_settings', null=True)
     class Meta:
         table_name = 'ChatBotSettings'
 

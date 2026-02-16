@@ -4,11 +4,7 @@ import soundfile
 import requests
 from os import environ
 from models import *
-
-
-ODD_SYMBOLS = ['(', ')', '/',  '\\', '|', '{', '}', 
-               '[', ']', ';', '"', '\'', ':', '~', 
-               '`', '«', '»']
+from constants import ODD_SYMBOLS
 
 
 def create_db(db_conf: peewee.Database):

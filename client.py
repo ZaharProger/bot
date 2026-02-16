@@ -1,88 +1,97 @@
 from abc import abstractmethod, ABC
 from random import random
+from datetime import datetime
 from os import environ
 from utils import convert_text_to_audio, perform_api_call
+from constants import *
 from models import *
 
 
 class BotClient(ABC):
-    def __init__(self, api_base_url, model, activity):
+    def __init__(self, api_base_url):
         super().__init__()
         self._api_base_url = api_base_url
         self._offset = 0
-        self._model = model
-        self._activity = activity
+        self._settings = None
     
 
-    def _update_offset(self, collection, update_id_key):
-        response_sorted_by_update_id = sorted(
-            collection,
-            key=lambda update: update[update_id_key],
-            reverse=True
-        )   
-                            
-        if len(response_sorted_by_update_id) != 0:
-            self._offset = response_sorted_by_update_id[0][update_id_key] + 1
-    
+    def _get_chatbot_settings(self):
+        found_settings = ChatBotSettings.select().where(ChatBotSettings.id == self._settings.id)
+        return found_settings[0] if len(found_settings) != 0 else None
 
-    @db.atomic
-    def _attach_chat_to_bot(self, chat_id, bot_id, settings):
-        found_chat, is_chat_created = Chat.get_or_create(
-            messenger_chat_id=chat_id,
+
+    def _get_chat(self, id):
+        found_chat, _ = Chat.get_or_create(
+            messenger_chat_id=id,
             defaults={
-                'messenger_chat_id': chat_id
+                'messenger_chat_id': id
             }
         )
-        if not is_chat_created:
-            found_bot, _ = Bot.get_or_create(
-                messenger_bot_id=bot_id,
-                defaults={
-                    'messenger_bot_id': bot_id
-                }
-            )
-            found_model, _ = AIModel.get_or_create(
-                name=settings['model'],
-                defaults={
-                    'name': settings['model']
-                }
-            )
-            ChatBotSettings.create(
-                chat=found_chat,
-                bot=found_bot,
-                activity=settings['activity'],
-                model=found_model
-            )
-
         return found_chat
+
+
+    def _get_bot(self, id):
+        found_bot, _ = Bot.get_or_create(
+            messenger_bot_id=id,
+            defaults={
+                'messenger_bot_id': id
+            }
+        )
+        return found_bot
+
+
+    def _get_model(self, name):
+        found_model, _ = AIModel.get_or_create(
+            name=name,
+            defaults={
+                'name': name
+            }
+        )
+        return found_model
+
+
+    def _init_chatbot_settings(self, chat, bot): 
+        self._settings = ChatBotSettings.create(chat=chat, bot=bot)
     
 
-    def _save_message_from_chat(self, chat, sender, message, send_datetime):
+    def _update_chatbot_activity(self, activity):
+        self._settings.activity = activity
+        self._settings.save()
+    
+
+    def _update_chatbot_model(self, model):
+        self._settings.model = model
+        self._settings.save()
+    
+
+    def _save_message_from_chat(self, sender, message, send_datetime):
         ChatMessage.create(
-            chat=chat,
+            chat=self._settings.chat,
             sender=sender,
             text=message,
             send_datetime=send_datetime
         )
     
 
-    def _create_answer_to_chat(self, response_from_llm, chat):
-        response_text = response_from_llm
-        if random() % 2 != 0:
-            voice_message_filename = f"{chat.messenger_chat_id}.wav"
-            convert_text_to_audio(response_text, 3, voice_message_filename)
+    # def _create_answer_for_chat(self, response_from_llm):
+    #     response_text = response_from_llm
+    #     voice_message_filename = None
+    #     if random() % 2 != 0:
+    #         voice_message_filename = f"{self._settings.chat.messenger_chat_id}.wav"
+    #         convert_text_to_audio(response_text, 3, voice_message_filename)
 
-        return response_text
+    #     return response_text
 
 
-    def _clear_chat_messages(self, chat):
+    def _clear_chat_messages(self):
         ChatMessage.delete() \
-            .where(ChatMessage.chat == chat) \
+            .where(ChatMessage.chat == self._settings.chat) \
             .execute()
 
 
-    def _get_chat_messages(self, chat):
+    def _get_chat_messages(self):
         ordered_messages_from_chat = ChatMessage.select() \
-            .where(ChatMessage.chat == chat) \
+            .where(ChatMessage.chat == self._settings.chat) \
             .order_by(ChatMessage.send_datetime)
         
         chat_members = []
@@ -94,11 +103,37 @@ class BotClient(ABC):
         chat_members_str = ','.join(chat_members)
         messages_str = '\n'.join(messages)
 
-        return f"Участники диалога: {chat_members_str}\nДиалог:\n{messages_str}"
+        return f"{BOT_PROMPT_DIALOG_MEMBERS}{chat_members_str}{BOT_PROMPT_DIALOG_HEADER}{messages_str}"
+
+
+    def _get_list_models(self):
+        ai_models_response = perform_api_call(
+            f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_LIST_MODELS']}",
+            method='get',
+            headers={
+                'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
+            }
+        )
+        
+        models = []
+        if ai_models_response.is_ok:
+            models = sorted(ai_models_response.data['models'], key=lambda model: model['name'])
+        
+        return models
 
 
     @abstractmethod
     def run(self):
+        pass
+
+
+    @abstractmethod
+    def _process_messages(self):
+        pass
+
+
+    @abstractmethod
+    def _generate_answer(self):
         pass
 
 
@@ -107,50 +142,149 @@ class TgBotClient(BotClient):
         super().__init__(f'{environ['TG_API_BASE_URL']}{bot_token}')
 
 
+    def _process_messages(self):
+        body = {
+            'timeout': '10',
+            'allowed_updates': '["message", "message_reaction]'
+        }
+        if self._offset > 0:
+            body['offset'] = f'{self._offset}'
+
+        messages_response = perform_api_call(
+            f"{self._api_base_url}{environ['TG_API_GET_UPDATES']}", 
+            method='get', 
+            body=body
+        )
+            
+        if messages_response.is_ok:
+            max_received_offset = -1
+            for response_item in messages_response.data['result']:
+                if response_item['message']['chat']['type'] != 'private':
+                    if response_item['update_id'] > max_received_offset:
+                        max_received_offset = response_item['update_id']
+
+                    if self._settings is None:
+                        bot_response = perform_api_call(
+                            f"{self._api_base_url}{environ['TG_API_GET_BOT_INFO']}", 
+                            method='get'
+                        )
+                        if bot_response.is_ok:
+                            current_bot = self._get_bot(bot_response.data['result']['id'])
+                            current_chat = self._get_chat(response_item['message']['chat']['id'])
+                            self._init_chatbot_settings(current_chat, current_bot)
+                            perform_api_call(
+                                f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
+                                method='post', 
+                                body={
+                                    'chat_id': self._settings.chat.messenger_chat_id,
+                                    'text': BOT_HELP
+                                }
+                            )
+
+                    if self._settings is not None:
+                        message_user = response_item['message']['from']
+                        message_user_id = message_user['id']
+                        message_text = response_item['message']['text']
+
+                        is_sender_admin = False
+                        chat_admins_response = perform_api_call(
+                            f"{self._api_base_url}{environ['TG_API_GET_CHAT_ADMINS']}", 
+                            method='get', 
+                            body={
+                                'chat_id': self._settings.chat.messenger_chat_id,
+                            }
+                        )
+                        if chat_admins_response.is_ok:
+                            chat_admins_ids = [admin['user']['id'] for admin in \
+                                               chat_admins_response.data['result']]
+                            is_sender_admin = message_user_id in chat_admins_ids
+                        
+                        if message_text.startswith('/help'):
+                            answer_text = BOT_HELP
+                        elif message_text.startswith('/models'):
+                            models = self._get_list_models()
+                            answer_text = f"{BOT_MODELS_HEADER}{'\n'.join(models)}"
+                        elif message_text.startswith('/model') and is_sender_admin:
+                            model_name = message_text.split(' ')
+                            if len(model_name) > 1:
+                                models = self._get_list_models()
+                                if model_name[1] not in models:
+                                    answer_text = BOT_UNKNOWN_MODEL
+                                else:
+                                    self._update_chatbot_model(self._get_model(model_name[1]))
+                                    answer_text = BOT_MODEL_UPDATED
+                            else:
+                                answer_text = BOT_ERROR
+                        elif message_text.startswith('/activity') and is_sender_admin:
+                            activity = message_text.split(' ')
+                            if len(activity) > 1 and activity[1] is float:
+                                self._update_chatbot_activity(float(activity[1]))
+                                answer_text = BOT_ACTIVITY_UPDATED
+                            else:
+                                answer_text = BOT_ERROR
+                        elif not is_sender_admin:
+                            answer_text = BOT_ACCESS_DENIED
+                        else:
+                            answer_text = None
+                        
+                        if answer_text is not None:
+                            perform_api_call(
+                                f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
+                                method='post', 
+                                body={
+                                    'chat_id': self._settings.chat.messenger_chat_id,
+                                    'text': answer_text
+                                }
+                            )
+                        else:
+                            message_send_datetime = datetime.fromtimestamp(response_item['message']['date'])
+                            message_sender = message_user['first_name']
+                            if 'last_name' in message_user.keys():
+                                message_sender += f" {message_user['last_name']}"
+                            self._save_message_from_chat( 
+                                message_sender, 
+                                message_text,
+                                message_send_datetime
+                            )
+            
+            self._offset = max_received_offset + 1
+        else:
+            print(messages_response.data)
+                
+
+    def _generate_answer(self):
+        if self._settings is not None and random() < self._settings.activity:
+            prompt = f"{BOT_PROMPT_TEXT}\n{self._get_chat_messages()}"
+            llm_response = perform_api_call(
+                f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
+                method='post',
+                headers={
+                    'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
+                },
+                body={
+                    'model': self._settings.model.name,
+                    'prompt': prompt,
+                    'stream': False
+                }
+            )
+            if llm_response.is_ok:
+                send_message_response = perform_api_call(
+                    f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
+                    method='post', 
+                    body={
+                        'chat_id': self._settings.chat.messenger_chat_id,
+                        'text': llm_response.data['response']
+                    }
+                )
+                # self._create_answer_for_chat(llm_response.data['response'])
+                if send_message_response.is_ok:
+                    self._clear_chat_messages()
+
+
     def run(self):
         while True:
-            body = {
-                'timeout': '10',
-                'allowed_updates': '["message", "message_reaction]'
-            }
-            if self._offset > 0:
-                body['offset'] = f'{self._offset}'
-
-            response = perform_api_call(
-                f"{self.__api_base_url}{environ['TG_API_GET_UPDATES']}", 
-                method='get', 
-                body=body
-            )
-            
-            if response.is_ok:
-                self._update_offset(response.data['result'], 'update_id')
-
-                current_chat = self._attach_chat_to_bot('', '', {
-                    'model': self._model,
-                    'activity': self._activity
-                })
-                self._save_message_from_chat(current_chat, '', '', '')
-                
-                if random() > self._activity:
-                    prompt = f"Поучаствуй в диалоге. Составь свою реплику, опираясь на лексику, эмоции и контекст диалога.\n{self._get_chat_messages(current_chat)}"
-                    response = perform_api_call(
-                        f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
-                        method='post',
-                        headers={
-                            'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
-                        },
-                        body={
-                            'model': self._model,
-                            'prompt': prompt,
-                            'stream': False
-                        }
-                    )
-                    if response.is_ok:
-                        response_from_llm = response.data['response']
-                        self._create_answer_to_chat(response_from_llm, current_chat)
-                        self._clear_chat_messages(current_chat)
-            else:
-                print(response.data)
+            self._process_messages()
+            # self._generate_answer()
 
 
 class VkBotClient(BotClient):
