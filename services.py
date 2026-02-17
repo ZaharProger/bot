@@ -34,7 +34,7 @@ class BotService(ABC):
         return found_model
 
 
-    def _get_chatbot_settings(self, chat, bot): 
+    def _get_chatbot_settings(self, chat): 
         found_settings, is_created = ChatBotSettings.get_or_create(
             chat=chat,
             defaults={
