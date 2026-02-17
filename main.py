@@ -1,7 +1,7 @@
 from os import environ
 from dotenv import load_dotenv, find_dotenv
 from utils import get_psql_db_conf, create_db
-from client import TgBotClient
+from services import TgBotService
 
 
 if __name__ == '__main__':
@@ -11,5 +11,5 @@ if __name__ == '__main__':
     db_conf = get_psql_db_conf()
     create_db(db_conf)
 
-    bot = TgBotClient(environ['BOT_TOKEN'])
+    bot = TgBotService(environ['BOT_TOKEN'])
     bot.run()

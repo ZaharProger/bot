@@ -7,17 +7,11 @@ from constants import *
 from models import *
 
 
-class BotClient(ABC):
+class BotService(ABC):
     def __init__(self, api_base_url):
         super().__init__()
         self._api_base_url = api_base_url
         self._offset = 0
-        self._settings = None
-    
-
-    def _get_chatbot_settings(self):
-        found_settings = ChatBotSettings.select().where(ChatBotSettings.id == self._settings.id)
-        return found_settings[0] if len(found_settings) != 0 else None
 
 
     def _get_chat(self, id):
@@ -50,23 +44,30 @@ class BotClient(ABC):
         return found_model
 
 
-    def _init_chatbot_settings(self, chat, bot): 
-        self._settings = ChatBotSettings.create(chat=chat, bot=bot)
+    def _get_chatbot_settings(self, chat, bot): 
+        found_settings, is_created = ChatBotSettings.get_or_create(
+            chat=chat, 
+            bot=bot,
+            defaults={
+                'chat': chat,
+                'bot': bot
+            }
+        )
+        return found_settings, is_created
+
+    def _update_chatbot_activity(self, settings, activity):
+        settings.activity = activity
+        settings.save()
     
 
-    def _update_chatbot_activity(self, activity):
-        self._settings.activity = activity
-        self._settings.save()
+    def _update_chatbot_model(self, settings, model):
+        settings.model = model
+        settings.save()
     
 
-    def _update_chatbot_model(self, model):
-        self._settings.model = model
-        self._settings.save()
-    
-
-    def _save_message_from_chat(self, sender, message, send_datetime):
+    def _save_message_from_chat(self, chat, sender, message, send_datetime):
         ChatMessage.create(
-            chat=self._settings.chat,
+            chat=chat,
             sender=sender,
             text=message,
             send_datetime=send_datetime
@@ -77,21 +78,21 @@ class BotClient(ABC):
     #     response_text = response_from_llm
     #     voice_message_filename = None
     #     if random() % 2 != 0:
-    #         voice_message_filename = f"{self._settings.chat.messenger_chat_id}.wav"
+    #         voice_message_filename = f"{current_settings.chat.messenger_chat_id}.wav"
     #         convert_text_to_audio(response_text, 3, voice_message_filename)
 
     #     return response_text
 
 
-    def _clear_chat_messages(self):
+    def _clear_chat_messages(self, chat):
         ChatMessage.delete() \
-            .where(ChatMessage.chat == self._settings.chat) \
+            .where(ChatMessage.chat == chat) \
             .execute()
 
 
-    def _get_chat_messages(self):
+    def _get_chat_messages(self, chat):
         ordered_messages_from_chat = ChatMessage.select() \
-            .where(ChatMessage.chat == self._settings.chat) \
+            .where(ChatMessage.chat == chat) \
             .order_by(ChatMessage.send_datetime)
         
         chat_members = []
@@ -137,7 +138,7 @@ class BotClient(ABC):
         pass
 
 
-class TgBotClient(BotClient):
+class TgBotService(BotService):
     def __init__(self, bot_token):
         super().__init__(f'{environ['TG_API_BASE_URL']}{bot_token}')
 
@@ -157,13 +158,18 @@ class TgBotClient(BotClient):
         )
             
         if messages_response.is_ok:
-            max_received_offset = -1
-            for response_item in messages_response.data['result']:
-                if response_item['message']['chat']['type'] != 'private':
-                    if response_item['update_id'] > max_received_offset:
-                        max_received_offset = response_item['update_id']
+            if len(messages_response.data['result']) != 0:
+                last_update = messages_response.data['result'][-1]
+                self._offset = last_update['update_id'] + 1
 
-                    if self._settings is None:
+            current_settings = None 
+            for response_item in messages_response.data['result']:
+                available_for_processing = 'message' in response_item.keys() and \
+                    "text" in response_item['message'].keys() and \
+                    response_item['message']['chat']['type'] != 'private'
+
+                if available_for_processing:
+                    if current_settings is None:
                         bot_response = perform_api_call(
                             f"{self._api_base_url}{environ['TG_API_GET_BOT_INFO']}", 
                             method='get'
@@ -171,17 +177,22 @@ class TgBotClient(BotClient):
                         if bot_response.is_ok:
                             current_bot = self._get_bot(bot_response.data['result']['id'])
                             current_chat = self._get_chat(response_item['message']['chat']['id'])
-                            self._init_chatbot_settings(current_chat, current_bot)
-                            perform_api_call(
-                                f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
-                                method='post', 
-                                body={
-                                    'chat_id': self._settings.chat.messenger_chat_id,
-                                    'text': BOT_HELP
-                                }
+                            current_settings, is_init = self._get_chatbot_settings(
+                                current_chat, 
+                                current_bot
                             )
 
-                    if self._settings is not None:
+                            if is_init:
+                                perform_api_call(
+                                    f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
+                                    method='post', 
+                                    body={
+                                        'chat_id': current_settings.chat.messenger_chat_id,
+                                        'text': BOT_HELP
+                                    }
+                                )
+
+                    if current_settings is not None:
                         message_user = response_item['message']['from']
                         message_user_id = message_user['id']
                         message_text = response_item['message']['text']
@@ -191,7 +202,7 @@ class TgBotClient(BotClient):
                             f"{self._api_base_url}{environ['TG_API_GET_CHAT_ADMINS']}", 
                             method='get', 
                             body={
-                                'chat_id': self._settings.chat.messenger_chat_id,
+                                'chat_id': current_settings.chat.messenger_chat_id,
                             }
                         )
                         if chat_admins_response.is_ok:
@@ -202,59 +213,75 @@ class TgBotClient(BotClient):
                         if message_text.startswith('/help'):
                             answer_text = BOT_HELP
                         elif message_text.startswith('/models'):
-                            models = self._get_list_models()
+                            models = [model['name'] for model in self._get_list_models()]
                             answer_text = f"{BOT_MODELS_HEADER}{'\n'.join(models)}"
                         elif message_text.startswith('/model') and is_sender_admin:
                             model_name = message_text.split(' ')
                             if len(model_name) > 1:
-                                models = self._get_list_models()
+                                models = [model['name'] for model in self._get_list_models()]
                                 if model_name[1] not in models:
                                     answer_text = BOT_UNKNOWN_MODEL
                                 else:
-                                    self._update_chatbot_model(self._get_model(model_name[1]))
+                                    self._update_chatbot_model(current_settings, self._get_model(model_name[1]))
                                     answer_text = BOT_MODEL_UPDATED
                             else:
                                 answer_text = BOT_ERROR
                         elif message_text.startswith('/activity') and is_sender_admin:
                             activity = message_text.split(' ')
-                            if len(activity) > 1 and activity[1] is float:
-                                self._update_chatbot_activity(float(activity[1]))
-                                answer_text = BOT_ACTIVITY_UPDATED
+                            try:
+                                float_activity = float(activity[1])
+                                if float_activity >= 0 and float_activity <= 1.0:
+                                    self._update_chatbot_activity(current_settings, float_activity)
+                                    answer_text = BOT_ACTIVITY_UPDATED
+                                else:
+                                    answer_text = BOT_ERROR
+                            except:
+                                answer_text = BOT_ERROR 
+                        elif message_text.startswith('/'):
+                            if is_sender_admin:
+                                answer_text = BOT_UNKNOWN_COMMAND
                             else:
-                                answer_text = BOT_ERROR
-                        elif not is_sender_admin:
-                            answer_text = BOT_ACCESS_DENIED
+                                answer_text = BOT_ACCESS_DENIED
                         else:
                             answer_text = None
-                        
+
                         if answer_text is not None:
-                            perform_api_call(
+                            send_message_response = perform_api_call(
                                 f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
                                 method='post', 
                                 body={
-                                    'chat_id': self._settings.chat.messenger_chat_id,
+                                    'chat_id': current_settings.chat.messenger_chat_id,
                                     'text': answer_text
                                 }
                             )
+                            if send_message_response.is_ok:
+                                message_send_datetime = datetime.fromtimestamp(send_message_response.data['result']['date'])
+                                sent_message_text = send_message_response.data['result']['text']
+                                self._save_message_from_chat(
+                                    current_settings.chat, 
+                                    BOT_ANSWER_DIALOG_MARK, 
+                                    sent_message_text,
+                                    message_send_datetime
+                                )
                         else:
                             message_send_datetime = datetime.fromtimestamp(response_item['message']['date'])
                             message_sender = message_user['first_name']
                             if 'last_name' in message_user.keys():
                                 message_sender += f" {message_user['last_name']}"
-                            self._save_message_from_chat( 
+                            self._save_message_from_chat(
+                                current_settings.chat, 
                                 message_sender, 
                                 message_text,
                                 message_send_datetime
                             )
             
-            self._offset = max_received_offset + 1
+            self._generate_answer(current_settings)
         else:
             print(messages_response.data)
                 
 
-    def _generate_answer(self):
-        if self._settings is not None and random() < self._settings.activity:
-            prompt = f"{BOT_PROMPT_TEXT}\n{self._get_chat_messages()}"
+    def _generate_answer(self, settings):
+        if settings is not None and settings.model is not None and random() < settings.activity:
             llm_response = perform_api_call(
                 f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
                 method='post',
@@ -262,8 +289,8 @@ class TgBotClient(BotClient):
                     'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
                 },
                 body={
-                    'model': self._settings.model.name,
-                    'prompt': prompt,
+                    'model': settings.model.name,
+                    'prompt': f"{BOT_PROMPT_TEXT}\n{self._get_chat_messages(settings.chat)}",
                     'stream': False
                 }
             )
@@ -272,21 +299,29 @@ class TgBotClient(BotClient):
                     f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
                     method='post', 
                     body={
-                        'chat_id': self._settings.chat.messenger_chat_id,
+                        'chat_id': settings.chat.messenger_chat_id,
                         'text': llm_response.data['response']
                     }
                 )
                 # self._create_answer_for_chat(llm_response.data['response'])
                 if send_message_response.is_ok:
-                    self._clear_chat_messages()
+                    message_send_datetime = datetime.fromtimestamp(send_message_response.data['result']['date'])
+                    sent_message_text = send_message_response.data['result']['text']
+                    self._save_message_from_chat(
+                        settings.chat, 
+                        BOT_ANSWER_DIALOG_MARK, 
+                        sent_message_text,
+                        message_send_datetime
+                    )
+
+                    self._clear_chat_messages(settings.chat)
 
 
     def run(self):
         while True:
             self._process_messages()
-            # self._generate_answer()
 
 
-class VkBotClient(BotClient):
+class VkBotService(BotService):
     def run():
         pass
