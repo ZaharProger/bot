@@ -17,12 +17,6 @@ class Chat(BaseModel):
         table_name = 'Chats'
 
 
-class Bot(BaseModel):
-    messenger_bot_id = peewee.BigIntegerField(null=False)
-    class Meta:
-        table_name = 'Bots'
-
-
 class AIModel(BaseModel):
     name = peewee.CharField(max_length=50, null=False)
     class Meta:
@@ -40,7 +34,6 @@ class ChatMessage(BaseModel):
 
 class ChatBotSettings(BaseModel):
     chat = peewee.ForeignKeyField(Chat, related_name='chats')
-    bot = peewee.ForeignKeyField(Bot, related_name='bots')
     activity = peewee.FloatField(null=False, default=0.5)
     model = peewee.ForeignKeyField(AIModel, related_name='chatbot_settings', null=True)
     class Meta:

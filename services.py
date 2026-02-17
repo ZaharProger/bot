@@ -24,16 +24,6 @@ class BotService(ABC):
         return found_chat
 
 
-    def _get_bot(self, id):
-        found_bot, _ = Bot.get_or_create(
-            messenger_bot_id=id,
-            defaults={
-                'messenger_bot_id': id
-            }
-        )
-        return found_bot
-
-
     def _get_model(self, name):
         found_model, _ = AIModel.get_or_create(
             name=name,
@@ -46,11 +36,9 @@ class BotService(ABC):
 
     def _get_chatbot_settings(self, chat, bot): 
         found_settings, is_created = ChatBotSettings.get_or_create(
-            chat=chat, 
-            bot=bot,
+            chat=chat,
             defaults={
-                'chat': chat,
-                'bot': bot
+                'chat': chat
             }
         )
         return found_settings, is_created
@@ -170,27 +158,18 @@ class TgBotService(BotService):
 
                 if available_for_processing:
                     if current_settings is None:
-                        bot_response = perform_api_call(
-                            f"{self._api_base_url}{environ['TG_API_GET_BOT_INFO']}", 
-                            method='get'
-                        )
-                        if bot_response.is_ok:
-                            current_bot = self._get_bot(bot_response.data['result']['id'])
-                            current_chat = self._get_chat(response_item['message']['chat']['id'])
-                            current_settings, is_init = self._get_chatbot_settings(
-                                current_chat, 
-                                current_bot
-                            )
+                        current_chat = self._get_chat(response_item['message']['chat']['id'])
+                        current_settings, is_init = self._get_chatbot_settings(current_chat)
 
-                            if is_init:
-                                perform_api_call(
-                                    f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
-                                    method='post', 
-                                    body={
-                                        'chat_id': current_settings.chat.messenger_chat_id,
-                                        'text': BOT_HELP
-                                    }
-                                )
+                        if is_init:
+                            perform_api_call(
+                                f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
+                                method='post', 
+                                body={
+                                    'chat_id': current_settings.chat.messenger_chat_id,
+                                    'text': BOT_HELP
+                                }
+                            )
 
                     if current_settings is not None:
                         message_user = response_item['message']['from']
