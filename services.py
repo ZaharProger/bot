@@ -288,6 +288,8 @@ class TgBotService(BotService):
                 )
                 # self._create_answer_for_chat(llm_response.data['response'])
                 if send_message_response.is_ok:
+                    self._clear_chat_messages(settings.chat)
+                    
                     send_message_item = send_message_response.data['result']
                     message_send_datetime = datetime.fromtimestamp(send_message_item['date'])
                     sent_message_text = send_message_item['text']
@@ -300,7 +302,6 @@ class TgBotService(BotService):
                         sent_message_text,
                         message_send_datetime
                     )
-                    self._clear_chat_messages(settings.chat)
 
 
     def run(self):
