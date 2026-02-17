@@ -255,11 +255,15 @@ class TgBotService(BotService):
                                 }
                             )
                             if send_message_response.is_ok:
-                                message_send_datetime = datetime.fromtimestamp(send_message_response.data['result']['date'])
-                                sent_message_text = send_message_response.data['result']['text']
+                                send_message_item = send_message_response.data['result']
+                                message_send_datetime = datetime.fromtimestamp(send_message_item['date'])
+                                sent_message_text = send_message_item['text']
+                                message_sender = send_message_item['from']['first_name']
+                                if 'last_name' in send_message_item['from'].keys():
+                                    message_sender += f" {send_message_item['from']['last_name']}"
                                 self._save_message_from_chat(
                                     current_settings.chat, 
-                                    BOT_ANSWER_DIALOG_MARK, 
+                                    message_sender, 
                                     sent_message_text,
                                     message_send_datetime
                                 )
@@ -305,15 +309,18 @@ class TgBotService(BotService):
                 )
                 # self._create_answer_for_chat(llm_response.data['response'])
                 if send_message_response.is_ok:
-                    message_send_datetime = datetime.fromtimestamp(send_message_response.data['result']['date'])
-                    sent_message_text = send_message_response.data['result']['text']
+                    send_message_item = send_message_response.data['result']
+                    message_send_datetime = datetime.fromtimestamp(send_message_item['date'])
+                    sent_message_text = send_message_item['text']
+                    message_sender = send_message_item['from']['first_name']
+                    if 'last_name' in send_message_item['from'].keys():
+                        message_sender += f" {send_message_item['from']['last_name']}"
                     self._save_message_from_chat(
                         settings.chat, 
-                        BOT_ANSWER_DIALOG_MARK, 
+                        message_sender, 
                         sent_message_text,
                         message_send_datetime
                     )
-
                     self._clear_chat_messages(settings.chat)
 
 

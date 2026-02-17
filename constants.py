@@ -16,4 +16,3 @@ BOT_PROMPT_TEXT = "Поучаствуй в диалоге. Составь сво
 BOT_PROMPT_DIALOG_MEMBERS = "Участники диалога: "
 BOT_PROMPT_DIALOG_HEADER = "\nДиалог:\n"
 BOT_MODELS_HEADER = "Доступные модели:\n"
-BOT_ANSWER_DIALOG_MARK = 'Ты'
