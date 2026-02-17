@@ -1,5 +1,5 @@
 from abc import abstractmethod, ABC
-from random import random
+from random import random, choice
 from datetime import datetime
 from os import environ
 from utils import convert_text_to_audio, perform_api_call
@@ -43,8 +43,21 @@ class BotService(ABC):
         )
         return found_settings, is_created
 
-    def _update_chatbot_activity(self, settings, activity):
-        settings.activity = activity
+
+    def _get_random_chatbot_settings(self):
+        chatbot_settings = ChatBotSettings.select() \
+                            .where((ChatBotSettings.model is not None) & 
+                             (ChatBotSettings.single_activity > 0.0))
+        return None if len(chatbot_settings) == 0 else choice(chatbot_settings)
+
+
+    def _update_chatbot_dialog_activity(self, settings, activity):
+        settings.dialog_activity = activity
+        settings.save()
+    
+
+    def _update_chatbot_single_activity(self, settings, activity):
+        settings.single_activity = activity
         settings.save()
     
 
@@ -205,13 +218,30 @@ class TgBotService(BotService):
                                     answer_text = BOT_MODEL_UPDATED
                             else:
                                 answer_text = BOT_ERROR
-                        elif message_text.startswith('/activity') and is_sender_admin:
+                        elif message_text.startswith('/dialog_activity') and is_sender_admin:
                             activity = message_text.split(' ')
                             try:
                                 float_activity = float(activity[1])
                                 if float_activity >= 0 and float_activity <= 1.0:
-                                    self._update_chatbot_activity(current_settings, float_activity)
-                                    answer_text = BOT_ACTIVITY_UPDATED
+                                    self._update_chatbot_dialog_activity(
+                                        current_settings, 
+                                        float_activity
+                                    )
+                                    answer_text = BOT_DIALOG_ACTIVITY_UPDATED
+                                else:
+                                    answer_text = BOT_ERROR
+                            except:
+                                answer_text = BOT_ERROR 
+                        elif message_text.startswith('/single_activity') and is_sender_admin:
+                            activity = message_text.split(' ')
+                            try:
+                                float_activity = float(activity[1])
+                                if float_activity >= 0 and float_activity <= 1.0:
+                                    self._update_chatbot_single_activity(
+                                        current_settings, 
+                                        float_activity
+                                    )
+                                    answer_text = BOT_SINGLE_ACTIVITY_UPDATED
                                 else:
                                     answer_text = BOT_ERROR
                             except:
@@ -258,50 +288,63 @@ class TgBotService(BotService):
                                 message_send_datetime
                             )
             
-            self._generate_answer(current_settings)
+            if current_settings is not None and current_settings.model is not None:
+                if random() < current_settings.dialog_activity:
+                    self._generate_answer(current_settings)
+                elif random() < current_settings.single_activity:
+                    self._generate_answer(current_settings, is_dialog=False)
+            else:
+                random_settings = self._get_random_chatbot_settings()
+                if random_settings is not None and random_settings.model is not None:
+                    if random() <  random_settings.single_activity:
+                        self._generate_answer(random_settings, is_dialog=False)
         else:
             print(messages_response.data)
                 
 
-    def _generate_answer(self, settings):
-        if settings is not None and settings.model is not None and random() < settings.activity:
-            llm_response = perform_api_call(
-                f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
-                method='post',
-                headers={
-                    'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
-                },
+    def _generate_answer(self, settings, is_dialog=True):
+        if is_dialog:
+            prompt = f"{BOT_PROMPT_DIALOG_TEXT}\n{self._get_chat_messages(settings.chat)}"
+        else:
+            prompt = BOT_PROMPT_SINGLE_TEXT
+
+        llm_response = perform_api_call(
+            f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
+            method='post',
+            headers={
+                'Authorization': f"Bearer {environ['OLLAMA_API_KEY']}"
+            },
+            body={
+                'model': settings.model.name,
+                'prompt': prompt,
+                'stream': False
+            }
+        )
+        if llm_response.is_ok:
+            send_message_response = perform_api_call(
+                f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
+                method='post', 
                 body={
-                    'model': settings.model.name,
-                    'prompt': f"{BOT_PROMPT_TEXT}\n{self._get_chat_messages(settings.chat)}",
-                    'stream': False
+                    'chat_id': settings.chat.messenger_chat_id,
+                    'text': llm_response.data['response']
                 }
             )
-            if llm_response.is_ok:
-                send_message_response = perform_api_call(
-                    f"{self._api_base_url}{environ['TG_API_SEND_MESSAGE']}", 
-                    method='post', 
-                    body={
-                        'chat_id': settings.chat.messenger_chat_id,
-                        'text': llm_response.data['response']
-                    }
-                )
                 # self._create_answer_for_chat(llm_response.data['response'])
-                if send_message_response.is_ok:
-                    self._clear_chat_messages(settings.chat)
+            if send_message_response.is_ok:
+                self._clear_chat_messages(settings.chat)
                     
-                    send_message_item = send_message_response.data['result']
-                    message_send_datetime = datetime.fromtimestamp(send_message_item['date'])
-                    sent_message_text = send_message_item['text']
-                    message_sender = send_message_item['from']['first_name']
-                    if 'last_name' in send_message_item['from'].keys():
-                        message_sender += f" {send_message_item['from']['last_name']}"
-                    self._save_message_from_chat(
-                        settings.chat, 
-                        message_sender, 
-                        sent_message_text,
-                        message_send_datetime
-                    )
+                send_message_item = send_message_response.data['result']
+                message_send_datetime = datetime.fromtimestamp(send_message_item['date'])
+                sent_message_text = send_message_item['text']
+                message_sender = send_message_item['from']['first_name']
+                if 'last_name' in send_message_item['from'].keys():
+                    message_sender += f" {send_message_item['from']['last_name']}"
+                self._save_message_from_chat(
+                    settings.chat, 
+                    message_sender, 
+                    sent_message_text,
+                    message_send_datetime
+                )
 
 
     def run(self):
