@@ -9,7 +9,7 @@ from constants import ODD_SYMBOLS
 
 def create_db(db_conf: peewee.Database):
     db.initialize(db_conf)
-    db_conf.create_tables([Chat, Bot, AIModel, ChatBotSettings, ChatMessage], safe=True)
+    db_conf.create_tables([Chat, AIModel, ChatBotSettings, ChatMessage], safe=True)
 
 
 def get_psql_db_conf():
