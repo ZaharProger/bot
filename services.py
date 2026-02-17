@@ -310,4 +310,4 @@ class TgBotService(BotService):
 
 class VkBotService(BotService):
     def run():
-        pass
+        ...
