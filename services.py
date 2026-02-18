@@ -42,22 +42,18 @@ class BotService(ABC):
             }
         )
         return found_settings, is_created
-
-
-    def _get_random_chatbot_settings(self):
-        chatbot_settings = ChatBotSettings.select() \
-                            .where((ChatBotSettings.model is not None) & 
-                             (ChatBotSettings.single_activity > 0.0))
-        return None if len(chatbot_settings) == 0 else choice(chatbot_settings)
-
-
-    def _update_chatbot_dialog_activity(self, settings, activity):
-        settings.dialog_activity = activity
-        settings.save()
     
 
-    def _update_chatbot_single_activity(self, settings, activity):
-        settings.single_activity = activity
+    def _get_random_chatbot_settings_of_chat_with_messages(self):
+        chats = [message.chat for message in ChatMessage.select()]
+        found_settings = ChatBotSettings.select() \
+            .where((ChatBotSettings.model is not None) & (ChatBotSettings.chat in chats))
+        
+        return None if len(found_settings) == 0 else choice(found_settings)
+    
+
+    def _update_chatbot_activity(self, settings, activity):
+        settings.activity = activity
         settings.save()
     
 
@@ -218,30 +214,16 @@ class TgBotService(BotService):
                                     answer_text = BOT_MODEL_UPDATED
                             else:
                                 answer_text = BOT_ERROR
-                        elif message_text.startswith('/dialog_activity') and is_sender_admin:
+                        elif message_text.startswith('/activity') and is_sender_admin:
                             activity = message_text.split(' ')
                             try:
                                 float_activity = float(activity[1])
                                 if float_activity >= 0 and float_activity <= 1.0:
-                                    self._update_chatbot_dialog_activity(
+                                    self._update_chatbot_activity(
                                         current_settings, 
                                         float_activity
                                     )
-                                    answer_text = BOT_DIALOG_ACTIVITY_UPDATED
-                                else:
-                                    answer_text = BOT_ERROR
-                            except:
-                                answer_text = BOT_ERROR 
-                        elif message_text.startswith('/single_activity') and is_sender_admin:
-                            activity = message_text.split(' ')
-                            try:
-                                float_activity = float(activity[1])
-                                if float_activity >= 0 and float_activity <= 1.0:
-                                    self._update_chatbot_single_activity(
-                                        current_settings, 
-                                        float_activity
-                                    )
-                                    answer_text = BOT_SINGLE_ACTIVITY_UPDATED
+                                    answer_text = BOT_ACTIVITY_UPDATED
                                 else:
                                     answer_text = BOT_ERROR
                             except:
@@ -289,25 +271,17 @@ class TgBotService(BotService):
                             )
             
             if current_settings is not None and current_settings.model is not None:
-                if random() < current_settings.dialog_activity:
+                if random() < current_settings.activity:
                     self._generate_answer(current_settings)
-                elif random() < current_settings.single_activity:
-                    self._generate_answer(current_settings, is_dialog=False)
             else:
-                random_settings = self._get_random_chatbot_settings()
-                if random_settings is not None and random_settings.model is not None:
-                    if random() <  random_settings.single_activity:
-                        self._generate_answer(random_settings, is_dialog=False)
+                random_settings = self._get_random_chatbot_settings_of_chat_with_messages()
+                if random_settings is not None and random() < random_settings.activity:
+                    self._generate_answer(random_settings)
         else:
             print(messages_response.data)
                 
 
-    def _generate_answer(self, settings, is_dialog=True):
-        if is_dialog:
-            prompt = f"{BOT_PROMPT_DIALOG_TEXT}\n{self._get_chat_messages(settings.chat)}"
-        else:
-            prompt = BOT_PROMPT_SINGLE_TEXT
-
+    def _generate_answer(self, settings):
         llm_response = perform_api_call(
             f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
             method='post',
@@ -316,7 +290,7 @@ class TgBotService(BotService):
             },
             body={
                 'model': settings.model.name,
-                'prompt': prompt,
+                'prompt': f"{BOT_PROMPT_TEXT}\n{self._get_chat_messages(settings.chat)}",
                 'stream': False
             }
         )
