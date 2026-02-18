@@ -287,10 +287,10 @@ class TgBotService(BotService):
                 
 
     def _generate_answer(self, settings, init_dialog=False):
-        chat_members = []
+        chat_members = set()
         messages = []
         for message in self._get_chat_messages(settings.chat):
-            chat_members.append(message.sender)
+            chat_members.add(message.sender)
             messages.append(f"{message.sender}: {message.text}")
         
         chat_members_str = ','.join(chat_members)
