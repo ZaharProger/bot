@@ -14,7 +14,18 @@ services:
       retries: 3
     ports:
       - 5432:5432
+  python:
+    build: .
+    volumes:
+      - bot:/src
+    env_file:
+      - api.env
+      - db.env
+    depends_on:
+      - postgres
 volumes:
+  bot:
+    driver: local
   bot_db:
     driver: local
 networks:

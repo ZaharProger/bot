@@ -1,5 +1,3 @@
-pyttsx3
-librosa
 requests
 peewee[psycopg3]
 dotenv

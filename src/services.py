@@ -2,9 +2,9 @@ from abc import abstractmethod, ABC
 from random import random, choice
 from datetime import datetime
 from os import environ
-from utils import convert_text_to_audio, perform_api_call
-from constants import *
-from models import *
+from .utils import perform_api_call
+from .constants import *
+from .models import *
 
 
 class BotService(ABC):

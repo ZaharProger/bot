@@ -1,7 +1,7 @@
 from os import environ
 from dotenv import load_dotenv, find_dotenv
-from utils import get_psql_db_conf, create_db
-from services import TgBotService
+from src.utils import get_psql_db_conf, create_db
+from src.services import TgBotService
 
 
 if __name__ == '__main__':
