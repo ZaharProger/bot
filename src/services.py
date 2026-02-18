@@ -44,11 +44,8 @@ class BotService(ABC):
         return found_settings, is_created
     
 
-    def _get_random_chatbot_settings_of_chat_with_messages(self):
-        chats = [message.chat for message in ChatMessage.select()]
-        found_settings = ChatBotSettings.select() \
-            .where((ChatBotSettings.model is not None) & (ChatBotSettings.chat in chats))
-        
+    def _get_random_chatbot_settings(self):
+        found_settings = ChatBotSettings.select().where(ChatBotSettings.model is not None)
         return None if len(found_settings) == 0 else choice(found_settings)
     
 
@@ -88,21 +85,10 @@ class BotService(ABC):
 
 
     def _get_chat_messages(self, chat):
-        ordered_messages_from_chat = ChatMessage.select() \
+        return ChatMessage.select() \
             .where(ChatMessage.chat == chat) \
             .order_by(ChatMessage.send_datetime)
         
-        chat_members = []
-        messages = []
-        for message in ordered_messages_from_chat:
-            chat_members.append(message.sender)
-            messages.append(f"{message.sender}: {message.text}")
-        
-        chat_members_str = ','.join(chat_members)
-        messages_str = '\n'.join(messages)
-
-        return f"{BOT_PROMPT_DIALOG_MEMBERS}{chat_members_str}{BOT_PROMPT_DIALOG_HEADER}{messages_str}"
-
 
     def _get_list_models(self):
         ai_models_response = perform_api_call(
@@ -274,14 +260,30 @@ class TgBotService(BotService):
                 if random() < current_settings.activity:
                     self._generate_answer(current_settings)
             else:
-                random_settings = self._get_random_chatbot_settings_of_chat_with_messages()
+                random_settings = self._get_random_chatbot_settings()
                 if random_settings is not None and random() < random_settings.activity:
-                    self._generate_answer(random_settings)
+                    self._generate_answer(random_settings, init_dialog=True)
         else:
             print(messages_response.data)
                 
 
-    def _generate_answer(self, settings):
+    def _generate_answer(self, settings, init_dialog=False):
+        chat_members = []
+        messages = []
+        for message in self._get_chat_messages(settings.chat):
+            chat_members.append(message.sender)
+            messages.append(f"{message.sender}: {message.text}")
+        
+        chat_members_str = ','.join(chat_members)
+        messages_str = '\n'.join(messages)
+
+        if init_dialog:
+            prompt_additional = f"{BOT_PROMPT_DIALOG_MEMBERS}{chat_members_str}"
+            prompt = f"{BOT_PROMPT_INIT_TEXT}\n{prompt_additional}"
+        else:
+            prompt_additional = f"{BOT_PROMPT_DIALOG_MEMBERS}{chat_members_str}{BOT_PROMPT_DIALOG_HEADER}{messages_str}"
+            prompt = f"{BOT_PROMPT_TEXT}\n{prompt_additional}"
+
         llm_response = perform_api_call(
             f"{environ['OLLAMA_API_BASE_URL']}{environ['OLLAMA_API_GENERATE']}",
             method='post',
@@ -290,7 +292,7 @@ class TgBotService(BotService):
             },
             body={
                 'model': settings.model.name,
-                'prompt': f"{BOT_PROMPT_TEXT}\n{self._get_chat_messages(settings.chat)}",
+                'prompt': prompt,
                 'stream': False
             }
         )
