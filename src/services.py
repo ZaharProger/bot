@@ -49,10 +49,15 @@ class BotService(ABC):
         return None if len(found_settings) == 0 else choice(found_settings)
     
 
-    def _update_chatbot_activity(self, settings, activity):
-        settings.activity = activity
+    def _update_chatbot_dialog_activity(self, settings, activity):
+        settings.dialog_activity = activity
         settings.save()
     
+
+    def _update_chatbot_personal_activity(self, settings, activity):
+        settings.personal_activity = activity
+        settings.save()
+
 
     def _update_chatbot_model(self, settings, model):
         settings.model = model
@@ -200,16 +205,30 @@ class TgBotService(BotService):
                                     answer_text = BOT_MODEL_UPDATED
                             else:
                                 answer_text = BOT_ERROR
-                        elif message_text.startswith('/activity') and is_sender_admin:
+                        elif message_text.startswith('/dialog_activity') and is_sender_admin:
                             activity = message_text.split(' ')
                             try:
                                 float_activity = float(activity[1])
                                 if float_activity >= 0 and float_activity <= 1.0:
-                                    self._update_chatbot_activity(
+                                    self._update_chatbot_dialog_activity(
                                         current_settings, 
                                         float_activity
                                     )
-                                    answer_text = BOT_ACTIVITY_UPDATED
+                                    answer_text = BOT_DIALOG_ACTIVITY_UPDATED
+                                else:
+                                    answer_text = BOT_ERROR
+                            except:
+                                answer_text = BOT_ERROR 
+                        elif message_text.startswith('/personal_activity') and is_sender_admin:
+                            activity = message_text.split(' ')
+                            try:
+                                float_activity = float(activity[1])
+                                if float_activity >= 0 and float_activity <= 1.0:
+                                    self._update_chatbot_personal_activity(
+                                        current_settings, 
+                                        float_activity
+                                    )
+                                    answer_text = BOT_PERSONAL_ACTIVITY_UPDATED
                                 else:
                                     answer_text = BOT_ERROR
                             except:
@@ -257,11 +276,11 @@ class TgBotService(BotService):
                             )
             
             if current_settings is not None and current_settings.model is not None:
-                if random() < current_settings.activity:
+                if random() < current_settings.dialog_activity:
                     self._generate_answer(current_settings)
             else:
                 random_settings = self._get_random_chatbot_settings()
-                if random_settings is not None and random() < random_settings.activity:
+                if random_settings is not None and random() < random_settings.personal_activity:
                     self._generate_answer(random_settings, init_dialog=True)
         else:
             print(messages_response.data)
