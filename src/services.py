@@ -45,7 +45,7 @@ class BotService(ABC):
     
 
     def _get_random_chatbot_settings(self):
-        found_settings = ChatBotSettings.select().where(ChatBotSettings.model is not None)
+        found_settings = ChatBotSettings.select().where(ChatBotSettings.model >> None)
         return None if len(found_settings) == 0 else choice(found_settings)
     
 
